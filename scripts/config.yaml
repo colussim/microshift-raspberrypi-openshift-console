@@ -1,0 +1,23 @@
+apiServer:
+  advertiseAddress: 192.168.0.25       # IP address of your Raspberry Pi
+  subjectAltNames: [openshift.genhome.com]  # DNS name for the API server certificate
+
+dns:
+  baseDomain: genhome.com              # Base domain for your cluster
+
+network:
+  clusterNetwork:
+    - 10.42.0.0/16                     # Pod network CIDR
+  serviceNetwork:
+    - 10.43.0.0/16                     # Service network CIDR
+
+node:
+  hostnameOverride: "openshift"        # Node hostname
+
+storage:
+  driver: "topolvm"                    # Use TopoLVM for persistent storage
+  topolvm:
+    device-classes:
+      - name: "default"
+        volume-group: "openshiftdata1" # LVM Volume Group created earlier
+        default: true

@@ -1,0 +1,107 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openshift-console-deployment
+  namespace: openshift-console
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openshift-console
+  template:
+    metadata:
+      labels:
+        app: openshift-console
+    spec:
+      # ─── initContainer: merge system CA bundle with MicroShift CA ───────────
+      initContainers:
+        - name: update-ca-trust
+          # Use the same image as the console container
+          image: quay.io/openshift-release-dev/ocp-v4.0-art-dev@sha256:<DIGEST_FROM_STEP_1>
+          command:
+            - /bin/bash
+            - -c
+            - |
+              cat /etc/pki/tls/certs/ca-bundle.crt /tmp/microshift-ca/ca.crt \
+                > /shared/ca-bundle.crt
+          volumeMounts:
+            - name: ca-cert
+              mountPath: /tmp/microshift-ca
+              readOnly: true
+            - name: shared-ca
+              mountPath: /shared
+
+      # ─── Main console container ──────────────────────────────────────────────
+      containers:
+        - name: openshift-console
+          # ✅ Use the digest from: oc adm release info --image-for=console
+          image: quay.io/openshift-release-dev/ocp-v4.0-art-dev@sha256:<DIGEST_FROM_STEP_1>
+          ports:
+            - containerPort: 9000
+          env:
+            # Disable user authentication (no OAuth in MicroShift)
+            - name: BRIDGE_USER_AUTH
+              value: disabled
+
+            # Off-cluster mode to reach MicroShift kube-apiserver
+            - name: BRIDGE_K8S_MODE
+              value: off-cluster
+            - name: BRIDGE_K8S_MODE_OFF_CLUSTER_ENDPOINT
+              value: https://192.168.0.25:6443
+
+            # TLS verification — set to false, CA is injected via SSL_CERT_FILE
+            - name: BRIDGE_K8S_MODE_OFF_CLUSTER_SKIP_VERIFY_TLS
+              value: "false"
+
+            # Bearer token authentication
+            - name: BRIDGE_K8S_AUTH
+              value: bearer-token
+            - name: BRIDGE_K8S_AUTH_BEARER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: openshift-console-token
+                  key: token
+
+            # CA file for the main proxy
+            - name: BRIDGE_CA_FILE
+              value: /etc/pki/tls/certs/ca-bundle.crt
+
+            # ✅ Critical: Go uses SSL_CERT_FILE for ALL HTTP clients
+            # This fixes the handlers.go TLS error
+            - name: SSL_CERT_FILE
+              value: /etc/pki/tls/certs/ca-bundle.crt
+
+          volumeMounts:
+            # Mount the enriched CA bundle (system + MicroShift) from initContainer
+            - name: shared-ca
+              mountPath: /etc/pki/tls/certs
+            # Also mount the raw MicroShift CA for reference
+            - name: ca-cert
+              mountPath: /etc/ssl/microshift
+              readOnly: true
+
+      # ─── Volumes ─────────────────────────────────────────────────────────────
+      volumes:
+        # ConfigMap containing the MicroShift CA certificate
+        - name: ca-cert
+          configMap:
+            name: microshift-ca
+        # Shared volume between initContainer and main container
+        - name: shared-ca
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openshift-console
+  namespace: openshift-console
+spec:
+  selector:
+    app: openshift-console
+  ports:
+    - protocol: TCP
+      port: 9000
+      targetPort: 9000
+  type: LoadBalancer
